@@ -10,6 +10,31 @@ use tokio::task::JoinSet;
 
 use byte_slice_cast::*;
 
+use super::cmdline::StdinFormat;
+
+/// gst source string for headerless audio arriving on stdin (fd 0)
+pub(super) fn stdin_src(format: StdinFormat, rate: u32) -> String {
+    raw_src("fdsrc fd=0", format, rate)
+}
+
+/// Wrap a headerless byte source in `rawaudioparse` so the rest of the
+/// pipeline (`decodebin ! audioconvert ! ...`) sees typed, timestamped audio.
+///
+/// `blocksize` is 20 ms of audio, the size of one RTP audio packet, so the
+/// source never sits on more than one packet before handing it on.
+fn raw_src(source: &str, format: StdinFormat, rate: u32) -> String {
+    let (parse, bytes_per_sample) = match format {
+        StdinFormat::Pcmu => ("format=mulaw", 1),
+        StdinFormat::Pcma => ("format=alaw", 1),
+        StdinFormat::S16le => ("format=pcm pcm-format=s16le", 2),
+    };
+    let blocksize = rate / 50 * bytes_per_sample;
+    format!(
+        "{} blocksize={} ! rawaudioparse use-sink-caps=false {} sample-rate={} num-channels=1",
+        source, blocksize, parse, rate
+    )
+}
+
 #[allow(clippy::type_complexity)]
 pub(super) fn from_input(
     input_src: &str,
@@ -181,4 +206,99 @@ fn create_pipeline(
     ));
 
     Ok(pipeline)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use std::time::Duration;
+
+    /// Camera-side framing used by every Reolink seen so far:
+    /// length_per_encoder 1024 -> 512 ADPCM bytes + 4 byte DVI4 header
+    const BLOCK: u16 = 516;
+    const CAM_RATE: u16 = 16000;
+
+    #[test]
+    fn stdin_src_pcmu_string() {
+        assert_eq!(
+            stdin_src(StdinFormat::Pcmu, 8000),
+            "fdsrc fd=0 blocksize=160 ! rawaudioparse use-sink-caps=false format=mulaw \
+             sample-rate=8000 num-channels=1"
+        );
+    }
+
+    #[test]
+    fn stdin_src_s16le_string() {
+        assert_eq!(
+            stdin_src(StdinFormat::S16le, 16000),
+            "fdsrc fd=0 blocksize=640 ! rawaudioparse use-sink-caps=false format=pcm \
+             pcm-format=s16le sample-rate=16000 num-channels=1"
+        );
+    }
+
+    /// Push `bytes` through the real pipeline from a file and return the size
+    /// of every chunk the appsink produced. Needs the gst plugins
+    /// (coreelements, rawparse, mulaw, alaw, audioconvert, audioresample,
+    /// volume, playback, adpcmenc, app), so this runs in the Docker test image.
+    async fn encode(bytes: &[u8], format: StdinFormat, rate: u32) -> Vec<usize> {
+        let path = std::env::temp_dir().join(format!(
+            "neolink-talk-{}-{:?}.raw",
+            std::process::id(),
+            format
+        ));
+        std::fs::File::create(&path)
+            .unwrap()
+            .write_all(bytes)
+            .unwrap();
+        let source = raw_src(
+            &format!("filesrc location={}", path.display()),
+            format,
+            rate,
+        );
+
+        let (mut set, rx) = from_input(&source, 1.0, BLOCK, CAM_RATE).unwrap();
+        let mut lens = vec![];
+        // The sender lives in the appsink callback and is dropped with the
+        // pipeline after EOS, which is what ends this loop. The timeout only
+        // guards against a wedged pipeline turning into a hung test.
+        while let Ok(chunk) = rx.recv_timeout(Duration::from_secs(10)) {
+            lens.push(chunk.len());
+        }
+        while set.join_next().await.is_some() {}
+        let _ = std::fs::remove_file(&path);
+        lens
+    }
+
+    /// One second in must come out as whole camera blocks: 16000 samples at
+    /// 1025 samples per DVI4 block is 15 full blocks, 16 if the tail is padded.
+    fn assert_one_second_of_blocks(lens: &[usize]) {
+        assert!(!lens.is_empty(), "pipeline produced no ADPCM");
+        for len in lens {
+            assert_eq!(
+                len % BLOCK as usize,
+                0,
+                "chunk of {len} bytes is not whole blocks"
+            );
+        }
+        let blocks = lens.iter().sum::<usize>() / BLOCK as usize;
+        assert!(
+            (15..=16).contains(&blocks),
+            "expected 15 or 16 blocks, got {blocks}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn mulaw_8k_encodes_to_whole_blocks() {
+        // 0xFF is u-law silence. 8000 bytes = 1 s at 8 kHz.
+        let lens = encode(&[0xFFu8; 8000], StdinFormat::Pcmu, 8000).await;
+        assert_one_second_of_blocks(&lens);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn s16le_16k_encodes_to_whole_blocks() {
+        // 32000 bytes = 16000 zero samples = 1 s at 16 kHz.
+        let lens = encode(&[0u8; 32000], StdinFormat::S16le, 16000).await;
+        assert_one_second_of_blocks(&lens);
+    }
 }

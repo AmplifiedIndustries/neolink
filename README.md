@@ -683,6 +683,31 @@ neolink talk --config=config.toml --microphone  CameraName
 Which uses the default microphone which depends on
 [gstreamer](https://gstreamer.freedesktop.org/documentation/autodetect/autoaudiosrc.html?gi-language=c#autoaudiosrc-page)
 
+or
+
+```bash
+neolink talk --config=config.toml --stdin CameraName
+```
+
+Which reads headerless mono audio from stdin (`--stdin-format` is `pcma`,
+`pcmu` or `s16le`, default `pcma`; `--stdin-rate` defaults to 8000 Hz) and
+exits when stdin closes. This is the shape a go2rtc `exec:` backchannel
+expects, so two-way audio works next to a `neolink stream` pipe source with
+no RTSP server:
+
+```yaml
+streams:
+  camera:
+    - exec:neolink stream --config /etc/neolink.toml camera --stream main --format ts
+    - exec:neolink talk --config /etc/neolink.toml --stdin camera#backchannel=1#audio=alaw/8000#killsignal=15#killtimeout=2
+```
+
+Browsers send G.711 over WebRTC, so declare `alaw/8000` or `pcmu/8000` on
+the go2rtc side. The camera is not contacted until the first byte arrives on
+stdin, so a spawn-then-kill probe never opens a session. Audio that arrives
+while neolink is still logging in is discarded, otherwise the whole session
+would play that many seconds late.
+
 ### PTZ
 
 You can control the PTZ using
