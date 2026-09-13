@@ -1943,6 +1943,55 @@ fn test_enc3_extension() {
 }
 
 #[test]
+fn test_talk_ability_multi_mode_deser() {
+    // Verbatim TalkAbility reply from a Reolink Lumus Pro (v3.2.0.4243):
+    // two audioStreamMode entries in one audioStreamModeList. The
+    // single-String model failed this with "duplicate field `audioStreamMode`".
+    let _ = env_logger::builder().is_test(true).try_init();
+    let sample = indoc!(
+        r#"<?xml version="1.0" encoding="UTF-8" ?>
+        <body>
+        <TalkAbility version="1.1">
+        <duplexList>
+        <duplex>FDX</duplex>
+        </duplexList>
+        <audioStreamModeList>
+        <audioStreamMode>followVideoStream</audioStreamMode>
+        <audioStreamMode>mixAudioStream</audioStreamMode>
+        </audioStreamModeList>
+        <audioConfigList>
+        <audioConfig>
+        <priority>0</priority>
+        <audioType>adpcm</audioType>
+        <sampleRate>16000</sampleRate>
+        <samplePrecision>16</samplePrecision>
+        <lengthPerEncoder>1024</lengthPerEncoder>
+        <soundTrack>mono</soundTrack>
+        </audioConfig>
+        </audioConfigList>
+        </TalkAbility>
+        </body>
+        "#
+    );
+    let b = BcXml::try_parse(sample.as_bytes()).unwrap();
+    let ta = b.talk_ability.expect("TalkAbility present");
+    assert_eq!(ta.version, "1.1");
+    assert_eq!(ta.duplex_list.len(), 1);
+    assert_eq!(ta.duplex_list[0].duplex, "FDX");
+    assert_eq!(ta.audio_stream_mode_list.len(), 1);
+    assert_eq!(
+        ta.audio_stream_mode_list[0].audio_stream_mode,
+        vec!["followVideoStream", "mixAudioStream"]
+    );
+    assert_eq!(ta.audio_config_list.len(), 1);
+    let ac = &ta.audio_config_list[0].audio_config;
+    assert_eq!(ac.audio_type, "adpcm");
+    assert_eq!(ac.sample_rate, 16000);
+    assert_eq!(ac.length_per_encoder, 1024);
+    assert_eq!(ac.sound_track, "mono");
+}
+
+#[test]
 fn test_empty_floodlight_status_list() {
     let _ = env_logger::builder().is_test(true).try_init();
     let sample = indoc!(
