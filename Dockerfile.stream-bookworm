@@ -68,7 +68,10 @@ RUN cargo test --release stream:: > /tmp/stream-tests.log 2>&1 \
 FROM docker.io/debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
 
 # The `for so in ...` guard fails the image rather than shipping a runtime the
-# transcoder cannot use. voaacenc is the only AAC encoder in bookworm's plugin
+# transcoder cannot use. The second row of plugins is the `neolink talk --stdin`
+# path (fdsrc ! rawaudioparse ! decodebin ! alawdec/mulawdec ! audioconvert !
+# audioresample ! volume ! queue ! adpcmenc ! appsink), which go2rtc spawns as
+# an exec backchannel from the same runtime directory. voaacenc is the only AAC encoder in bookworm's plugin
 # set (fdkaacenc is not built; avenc_aac lives in gstreamer1.0-libav, whose
 # libav* closure is an order of magnitude more to bind-mount into Frigate).
 # hadolint ignore=DL3008
@@ -83,7 +86,9 @@ RUN apt-get update && \
         gstreamer1.0-plugins-bad && \
     apt-get clean -y && rm -rf /var/lib/apt/lists/* ; \
     for so in libgstapp libgstaudioconvert libgstaudioresample \
-              libgstaudioparsers libgstvoaacenc libgstcoreelements ; do \
+              libgstaudioparsers libgstvoaacenc libgstcoreelements \
+              libgstrawparse libgstplayback libgstalaw libgstmulaw \
+              libgstvolume libgstadpcmenc ; do \
       test -f "/usr/lib/x86_64-linux-gnu/gstreamer-1.0/$so.so" \
         || { echo "MISSING GStreamer plugin $so.so" >&2 ; exit 1 ; } ; \
     done
