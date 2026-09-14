@@ -36,6 +36,8 @@ pub(crate) async fn main(opt: Opt, reactor: NeoReactor) -> Result<()> {
             log::info!("stdin closed before any audio arrived, nothing to say");
             return Ok(());
         }
+        // Every second here is silence at the camera after the mic press.
+        crate::common::SKIP_CONNECT_SETTLE.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     let camera = reactor.get(&opt.camera).await?;

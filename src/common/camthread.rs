@@ -1,5 +1,5 @@
 use std::sync::{
-    atomic::{AtomicU64, AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     Arc, Weak,
 };
 use tokio::{
@@ -32,6 +32,14 @@ use neolink_core::bc_protocol::BcCamera;
 // (rtsp/factory.rs) references this same canonical threshold instead of
 // hardcoding its own literal.
 pub(crate) const FRAME_STALENESS_MS: u64 = 30_000;
+
+/// Skip the two 2 s post-login settle sleeps and the camera time check in
+/// `run_camera`. Set by `neolink talk --stdin`, which logs in on the first
+/// byte of a viewer's microphone audio: those 4 s were 90 % of the delay
+/// before the first word played at the camera (measured 2026-09-14, login
+/// itself takes 0.3 s). The long-lived `stream`/`rtsp` sessions keep the
+/// settle, since some cameras error on calls made while waking up.
+pub(crate) static SKIP_CONNECT_SETTLE: AtomicBool = AtomicBool::new(false);
 
 #[derive(Eq, PartialEq, Copy, Clone)]
 pub(crate) enum NeoCamThreadState {
@@ -123,11 +131,15 @@ impl NeoCamThread {
         let camera = Arc::new(connect_and_login(config).await?);
         log::trace!("  - Connected");
 
-        sleep(Duration::from_secs(2)).await; // Delay a little since some calls will error if camera is waking up
-        if let Err(e) = update_camera_time(&camera, &name, config.update_time).await {
-            log::warn!("Could not set camera time, (perhaps missing on this camera of your login in not an admin): {e:?}");
+        if SKIP_CONNECT_SETTLE.load(Ordering::Relaxed) {
+            log::debug!("{name}: skipping the post-login settle and time check");
+        } else {
+            sleep(Duration::from_secs(2)).await; // Delay a little since some calls will error if camera is waking up
+            if let Err(e) = update_camera_time(&camera, &name, config.update_time).await {
+                log::warn!("Could not set camera time, (perhaps missing on this camera of your login in not an admin): {e:?}");
+            }
+            sleep(Duration::from_secs(2)).await; // Delay a little since some calls will error if camera is waking up
         }
-        sleep(Duration::from_secs(2)).await; // Delay a little since some calls will error if camera is waking up
 
         self.camera_watch.send_replace(Arc::downgrade(&camera));
 
