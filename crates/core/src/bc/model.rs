@@ -80,6 +80,34 @@ pub const MSG_ID_SET_LED_STATUS: u32 = 209;
 pub const MSG_ID_GET_PIR_ALARM: u32 = 212;
 /// Setting PIR status messages have this ID
 pub const MSG_ID_START_PIR_ALARM: u32 = 213;
+/// Getting the FTP upload configuration (server, photo size and period) has this ID
+pub const MSG_ID_GET_FTP: u32 = 68;
+/// Setting the FTP upload configuration. Assumed on the get+1 pattern; overridable on the CLI.
+pub const MSG_ID_SET_FTP: u32 = 69;
+/// Getting the FTP trigger schedule has this ID
+pub const MSG_ID_GET_FTP_TASK: u32 = 70;
+/// Setting the FTP trigger schedule has this ID
+pub const MSG_ID_SET_FTP_TASK: u32 = 71;
+/// Getting the image signal processing settings (anti-flicker among them) has this ID
+pub const MSG_ID_GET_ISP: u32 = 26;
+/// Setting the image signal processing settings has this ID
+pub const MSG_ID_SET_ISP: u32 = 25;
+/// Getting the cellular link status (signal, network mode, operator) has this ID
+pub const MSG_ID_GET_NET_3G4G_INFO: u32 = 256;
+/// Getting the cellular module identity (ICCID, IMEI) has this ID
+pub const MSG_ID_GET_NET_3G4G_MODULE_INFO: u32 = 257;
+/// Getting the on-screen display (camera name, timestamp, watermark) has this ID
+pub const MSG_ID_GET_OSD: u32 = 44;
+/// Setting the on-screen display. Not confirmed from any published source -- every other pair in
+/// this protocol is get+1 and that is what this assumes, which is why the CLI can override it.
+pub const MSG_ID_SET_OSD: u32 = 45;
+/// Getting the AI detection config (per object type sensitivity / dwell) has this ID
+///
+/// Message id and schema taken from reolink_aio's Baichuan implementation
+/// (`reolink_aio/baichuan/baichuan.py`, `GetAiAlarm`/`SetAiAlarm`), not from a capture.
+pub const MSG_ID_GET_AI_DETECT_CFG: u32 = 342;
+/// Setting the AI detection config has this ID
+pub const MSG_ID_SET_AI_DETECT_CFG: u32 = 343;
 /// Set Email Task
 pub const MSG_ID_SET_EMAIL_TASK: u32 = 216;
 /// Get Email Task

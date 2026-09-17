@@ -54,6 +54,30 @@ pub struct BcXml {
     /// rfAlarmCfg xml is sent or recieved as part of the PIR get/setting
     #[serde(rename = "rfAlarmCfg", skip_serializing_if = "Option::is_none")]
     pub rf_alarm_cfg: Option<RfAlarmCfg>,
+    /// AiDetectCfg xml is sent or received as part of the AI detection get/setting
+    #[serde(rename = "AiDetectCfg", skip_serializing_if = "Option::is_none")]
+    pub ai_detect_cfg: Option<AiDetectCfg>,
+    /// Ftp xml, the FTP upload configuration
+    #[serde(rename = "Ftp", skip_serializing_if = "Option::is_none")]
+    pub ftp: Option<Ftp>,
+    /// FtpTask xml, which triggers upload and when
+    #[serde(rename = "FtpTask", skip_serializing_if = "Option::is_none")]
+    pub ftp_task: Option<FtpTask>,
+    /// InputAdvanceCfg xml, the advanced image settings including anti-flicker
+    #[serde(rename = "InputAdvanceCfg", skip_serializing_if = "Option::is_none")]
+    pub input_advance_cfg: Option<InputAdvanceCfg>,
+    /// Net3g4gInfo xml, the cellular link status of a 4G camera
+    #[serde(rename = "Net3g4gInfo", skip_serializing_if = "Option::is_none")]
+    pub net_3g4g_info: Option<Net3g4gInfo>,
+    /// Net3g4gModuleInfo xml, the cellular module's identity
+    #[serde(rename = "Net3g4gModuleInfo", skip_serializing_if = "Option::is_none")]
+    pub net_3g4g_module_info: Option<Net3g4gModuleInfo>,
+    /// OsdDatetime xml, the timestamp burned into the video
+    #[serde(rename = "OsdDatetime", skip_serializing_if = "Option::is_none")]
+    pub osd_datetime: Option<OsdDatetime>,
+    /// OsdChannelName xml, the camera name burned into the video plus the watermark flag
+    #[serde(rename = "OsdChannelName", skip_serializing_if = "Option::is_none")]
+    pub osd_channel_name: Option<OsdChannelName>,
     /// Revieced as part of the TalkAbility request
     #[serde(rename = "TalkAbility", skip_serializing_if = "Option::is_none")]
     pub talk_ability: Option<TalkAbility>,
@@ -459,6 +483,331 @@ pub struct FloodlightManual {
     pub duration: u16,
 }
 
+/// Ftp xml, the FTP upload configuration
+///
+/// Modelled in full, because a write is a read-modify-write and serde emits only what it knows.
+///
+/// **`password` needs care, and this is load-bearing.** The camera returns it masked as a row of
+/// asterisks, so writing that value back would set the FTP password *to* asterisks and silently
+/// break every upload from a deployed camera. The field is therefore skipped whenever it is
+/// `None`, and every writer MUST clear the deserialized mask before setting anything -- see the
+/// `apply` subcommand, which does exactly that. Left `None`, the camera keeps its own password.
+#[derive(PartialEq, Eq, Default, Debug, Deserialize, Serialize)]
+pub struct Ftp {
+    /// XML Version
+    #[serde(rename = "@version")]
+    pub version: String,
+    /// FTP host
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<String>,
+    /// FTP port
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    /// Whether to log in anonymously. The firmware really does spell it without the leading `a`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nonymous: Option<u8>,
+    /// Directory uploaded into, which on these cameras is the camera's own UID
+    #[serde(rename = "remoteDir", default, skip_serializing_if = "Option::is_none")]
+    pub remote_dir: Option<String>,
+    /// FTP user
+    #[serde(rename = "userName", default, skip_serializing_if = "Option::is_none")]
+    pub user_name: Option<String>,
+    /// FTP password. Read back masked; only ever written when a caller supplies a real one, and
+    /// never round-tripped -- see the note on this struct
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+    /// Longest password the camera accepts
+    #[serde(rename = "pwdMaxLen", default, skip_serializing_if = "Option::is_none")]
+    pub pwd_max_len: Option<u32>,
+    /// Whether the camera offers a connection test
+    #[serde(rename = "supportTest", default, skip_serializing_if = "Option::is_none")]
+    pub support_test: Option<u8>,
+    /// Which stream video uploads come from
+    #[serde(rename = "streamType", default, skip_serializing_if = "Option::is_none")]
+    pub stream_type: Option<u8>,
+    /// FTP protocol variant
+    #[serde(rename = "ftpVersion", default, skip_serializing_if = "Option::is_none")]
+    pub ftp_version: Option<u8>,
+    /// Video upload period
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intervals: Option<u32>,
+    /// Whether the camera creates dated subdirectories
+    #[serde(rename = "autoDir", default, skip_serializing_if = "Option::is_none")]
+    pub auto_dir: Option<u8>,
+    /// Photo upload policy
+    #[serde(rename = "picPolicy", default, skip_serializing_if = "Option::is_none")]
+    pub pic_policy: Option<u8>,
+    /// Photo filename template
+    #[serde(rename = "picName", default, skip_serializing_if = "Option::is_none")]
+    pub pic_name: Option<String>,
+    /// Photo format
+    #[serde(rename = "picType", default, skip_serializing_if = "Option::is_none")]
+    pub pic_type: Option<u8>,
+    /// Uploaded photo height in pixels -- the photo quality, with the width
+    #[serde(rename = "picHeight", default, skip_serializing_if = "Option::is_none")]
+    pub pic_height: Option<u32>,
+    /// Uploaded photo width in pixels
+    #[serde(rename = "picWidth", default, skip_serializing_if = "Option::is_none")]
+    pub pic_width: Option<u32>,
+    /// Seconds between scheduled photo uploads
+    #[serde(rename = "picIntervals", default, skip_serializing_if = "Option::is_none")]
+    pub pic_intervals: Option<u32>,
+    /// Video upload policy
+    #[serde(rename = "videoPolicy", default, skip_serializing_if = "Option::is_none")]
+    pub video_policy: Option<u8>,
+    /// Video filename template
+    #[serde(rename = "videoName", default, skip_serializing_if = "Option::is_none")]
+    pub video_name: Option<String>,
+    /// Whether only FTPS is allowed
+    #[serde(rename = "onlyFtps", default, skip_serializing_if = "Option::is_none")]
+    pub only_ftps: Option<u8>,
+    /// Video lengths the camera offers
+    #[serde(rename = "videoDelayList", default, skip_serializing_if = "Option::is_none")]
+    pub video_delay_list: Option<VideoDelayList>,
+}
+
+/// The video lengths a camera offers for FTP uploads
+#[derive(PartialEq, Eq, Default, Debug, Deserialize, Serialize)]
+pub struct VideoDelayList {
+    /// Each offered length, in seconds
+    #[serde(default, rename = "delay")]
+    pub delay: Vec<u32>,
+}
+
+/// FtpTask xml, which triggers an FTP upload and during which hours
+#[derive(PartialEq, Eq, Default, Debug, Deserialize, Serialize)]
+pub struct FtpTask {
+    /// XML Version
+    #[serde(rename = "@version")]
+    pub version: String,
+    /// The channel this applies to
+    #[serde(rename = "channelId", default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<u8>,
+    /// Whether FTP upload is on at all
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enable: Option<u8>,
+    /// One schedule per trigger type
+    #[serde(rename = "typeScheduleList", default, skip_serializing_if = "Option::is_none")]
+    pub type_schedule_list: Option<TypeScheduleList>,
+}
+
+/// The per-trigger schedules of an [`FtpTask`]
+#[derive(PartialEq, Eq, Default, Debug, Deserialize, Serialize)]
+pub struct TypeScheduleList {
+    /// One entry per trigger type
+    #[serde(default, rename = "item")]
+    pub item: Vec<TypeScheduleItem>,
+}
+
+/// One trigger type and the hours it uploads during
+#[derive(PartialEq, Eq, Default, Debug, Deserialize, Serialize)]
+pub struct TypeScheduleItem {
+    /// The trigger, e.g. `Normal`, `people`, `vehicle`, `other`, `dog_cat`
+    #[serde(rename = "type")]
+    pub trigger_type: String,
+    /// A 168-character table, one digit per hour of the week
+    #[serde(rename = "valueTable")]
+    pub value_table: String,
+}
+
+/// InputAdvanceCfg xml, the advanced image settings
+///
+/// **Deliberately partial.** The camera sends around sixty fields here across a dozen nested
+/// blocks -- exposure, white balance, day/night, backlight, noise reduction. Modelling all of them
+/// to change one would be a large surface to get wrong, so only the anti-flicker block is
+/// described and the camera is relied on to merge the rest.
+///
+/// That is not assumed blind: this camera demonstrably merges rather than replaces -- writing
+/// `AiDetectCfg` with five of its eleven fields left the other six untouched, verified by diffing
+/// the message before and after. The same check is run against this message before it is trusted.
+#[derive(PartialEq, Eq, Default, Debug, Deserialize, Serialize)]
+pub struct InputAdvanceCfg {
+    /// XML Version
+    #[serde(rename = "@version")]
+    pub version: String,
+    /// The channel this applies to
+    #[serde(rename = "channelId", default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<u8>,
+    /// Mains frequency compensation, which is what removes flicker under artificial light
+    #[serde(rename = "PowerLineFrequency", default, skip_serializing_if = "Option::is_none")]
+    pub power_line_frequency: Option<PowerLineFrequency>,
+}
+
+/// The anti-flicker setting of an [`InputAdvanceCfg`]
+#[derive(PartialEq, Eq, Default, Debug, Deserialize, Serialize)]
+pub struct PowerLineFrequency {
+    /// `50hz`, `60hz` or `outdoor` -- the last of which the Reolink app labels *Other*, not Outdoor
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    /// Whether compensation is applied at all; 0 is the camera's "off"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enable: Option<u8>,
+}
+
+/// Net3g4gInfo xml, the cellular link status of a 4G camera
+///
+/// Read-only: nothing here is a setting, so unlike the written-back messages a missing field costs
+/// nothing but the value itself.
+#[derive(PartialEq, Eq, Default, Debug, Deserialize, Serialize)]
+pub struct Net3g4gInfo {
+    /// XML Version
+    #[serde(rename = "@version")]
+    pub version: String,
+    /// Signal strength as bars, 0 to 5
+    #[serde(rename = "sigIntensityLevel", default, skip_serializing_if = "Option::is_none")]
+    pub sig_intensity_level: Option<u8>,
+    /// Raw signal metric behind the bars
+    #[serde(rename = "sigIntensityValue", default, skip_serializing_if = "Option::is_none")]
+    pub sig_intensity_value: Option<i32>,
+    /// Radio access technology the module reports
+    #[serde(rename = "netMode", default, skip_serializing_if = "Option::is_none")]
+    pub net_mode: Option<u8>,
+    /// The network operator as MCC+MNC, e.g. 310410
+    #[serde(rename = "mobileOperator", default, skip_serializing_if = "Option::is_none")]
+    pub mobile_operator: Option<String>,
+}
+
+/// Net3g4gModuleInfo xml, the cellular module's identity
+///
+/// The ICCID identifies the SIM and the IMEI the modem; both are printed on the hardware, and this
+/// is the only way to read them without physical access.
+#[derive(PartialEq, Eq, Default, Debug, Deserialize, Serialize)]
+pub struct Net3g4gModuleInfo {
+    /// XML Version
+    #[serde(rename = "@version")]
+    pub version: String,
+    /// The SIM card's 20-digit identifier
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub iccid: Option<String>,
+    /// The modem's 15-digit identifier
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub imei: Option<String>,
+    /// The SIM's phone number, empty on a data-only plan
+    #[serde(rename = "phoneNumber", default, skip_serializing_if = "Option::is_none")]
+    pub phone_number: Option<String>,
+}
+
+/// OsdDatetime xml, the timestamp overlay burned into the video
+///
+/// Modelled in full, like every other message written back: a write is a read-modify-write and
+/// serde emits only what it knows, so a missing field is an overlay setting silently dropped.
+#[derive(PartialEq, Eq, Default, Debug, Deserialize, Serialize)]
+pub struct OsdDatetime {
+    /// XML Version
+    #[serde(rename = "@version")]
+    pub version: String,
+    /// The channel this applies to
+    #[serde(rename = "channelId", default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<u8>,
+    /// Whether the timestamp is drawn
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enable: Option<u8>,
+    /// Overlay position, packed as two 16-bit halves
+    #[serde(rename = "topLeftX", default, skip_serializing_if = "Option::is_none")]
+    pub top_left_x: Option<u32>,
+    /// Overlay position, packed as two 16-bit halves
+    #[serde(rename = "topLeftY", default, skip_serializing_if = "Option::is_none")]
+    pub top_left_y: Option<u32>,
+    /// Overlay width, 0 when the camera sizes it itself
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    /// Overlay height, 0 when the camera sizes it itself
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    /// Language the timestamp is drawn in
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+}
+
+/// OsdChannelName xml, the camera name burned into the video
+///
+/// Carries the watermark flag too, which is why it is worth writing: `enWatermark` is the only
+/// place the logo overlay is exposed. Modelled in full for the same reason as every other
+/// written-back message.
+#[derive(PartialEq, Eq, Default, Debug, Deserialize, Serialize)]
+pub struct OsdChannelName {
+    /// XML Version
+    #[serde(rename = "@version")]
+    pub version: String,
+    /// The channel this applies to
+    #[serde(rename = "channelId", default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<u8>,
+    /// The camera name drawn on the video
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Whether the name is drawn
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enable: Option<u8>,
+    /// Overlay position, packed as two 16-bit halves
+    #[serde(rename = "topLeftX", default, skip_serializing_if = "Option::is_none")]
+    pub top_left_x: Option<u32>,
+    /// Overlay position, packed as two 16-bit halves
+    #[serde(rename = "topLeftY", default, skip_serializing_if = "Option::is_none")]
+    pub top_left_y: Option<u32>,
+    /// Whether the Reolink logo watermark is drawn
+    #[serde(rename = "enWatermark", default, skip_serializing_if = "Option::is_none")]
+    pub en_watermark: Option<u8>,
+    /// Whether the name is drawn on a background block
+    #[serde(rename = "enBgcolor", default, skip_serializing_if = "Option::is_none")]
+    pub en_bgcolor: Option<u8>,
+}
+
+/// AiDetectCfg xml, the per-object-type detection settings ("people", "vehicle", "dog_cat")
+///
+/// **Every field the camera sends must be modelled here.** Writing is a read-modify-write of the
+/// whole message, and serde emits only the fields it knows, so a field missing from this struct is
+/// a camera setting silently dropped on the next write -- the detection zone and the object size
+/// limits among them. That is not hypothetical: an earlier version of this struct carried only the
+/// first five fields.
+///
+/// Every field but the version is nonetheless optional, because which of them a given firmware
+/// sends is not something to assume -- assuming that on `rfAlarmCfg` is what made the PIR
+/// unreadable on this camera's firmware.
+///
+/// The fractional values are kept as **strings, not floats**, on purpose: they arrive with more
+/// significant digits than an `f32` holds, so parsing and re-emitting them would quietly change
+/// settings the operator never touched. Nothing here needs their numeric value; whatever does can
+/// parse at the edge where it is displayed.
+#[derive(PartialEq, Eq, Default, Debug, Deserialize, Serialize)]
+pub struct AiDetectCfg {
+    /// XML Version
+    #[serde(rename = "@version")]
+    pub version: String,
+    /// The channel this applies to
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chn: Option<u8>,
+    /// The object type, e.g. "people", "vehicle", "dog_cat"
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub ai_type: Option<String>,
+    /// Detection sensitivity, 0 to 100 and not inverted
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sensitivity: Option<u8>,
+    /// How long the object must remain before the camera reports it, in seconds
+    #[serde(rename = "stayTime", default, skip_serializing_if = "Option::is_none")]
+    pub stay_time: Option<u32>,
+    /// Smallest object height that counts, as a fraction of the frame
+    #[serde(rename = "minTargetHeight", default, skip_serializing_if = "Option::is_none")]
+    pub min_target_height: Option<String>,
+    /// Smallest object width that counts, as a fraction of the frame
+    #[serde(rename = "minTargetWidth", default, skip_serializing_if = "Option::is_none")]
+    pub min_target_width: Option<String>,
+    /// Largest object height that counts, as a fraction of the frame
+    #[serde(rename = "maxTargetHeight", default, skip_serializing_if = "Option::is_none")]
+    pub max_target_height: Option<String>,
+    /// Largest object width that counts, as a fraction of the frame
+    #[serde(rename = "maxTargetWidth", default, skip_serializing_if = "Option::is_none")]
+    pub max_target_width: Option<String>,
+    /// Width of the detection-zone grid, in cells
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    /// Height of the detection-zone grid, in cells
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    /// The detection zone itself: a base64 bitmap of `width` x `height` cells
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area: Option<String>,
+}
+
 /// rfAlarmCfg xml
 #[derive(PartialEq, Eq, Default, Debug, Deserialize, Serialize)]
 pub struct RfAlarmCfg {
@@ -466,22 +815,31 @@ pub struct RfAlarmCfg {
     #[serde(rename = "@version")]
     pub version: String,
     /// Rfid
-    #[serde(rename = "rfID")]
-    pub rf_id: u8,
+    ///
+    /// Optional: Go Plus firmware v3.0.0.6102 omits it (rfAlarmCfg version 1.1).
+    #[serde(rename = "rfID", default, skip_serializing_if = "Option::is_none")]
+    pub rf_id: Option<u8>,
     /// PIR status
     pub enable: u8,
     /// PIR sensitivity
-    pub sensitivity: u8,
+    ///
+    /// Optional: the same firmware sends only `sensiValue`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sensitivity: Option<u8>,
     /// PIR sensivalue
     pub sensiValue: u8,
     /// reduce False alarm boolean
     pub reduceFalseAlarm: u8,
     /// XML time block for all week days
-    #[serde(rename = "timeBlockList")]
-    pub time_block_list: TimeBlockList,
+    ///
+    /// Optional: absent on Go Plus firmware v3.0.0.6102.
+    #[serde(rename = "timeBlockList", default, skip_serializing_if = "Option::is_none")]
+    pub time_block_list: Option<TimeBlockList>,
     /// The alarm handle to attach to this Rf
-    #[serde(rename = "alarmHandle")]
-    pub alarm_handle: AlarmHandle,
+    ///
+    /// Optional: absent on Go Plus firmware v3.0.0.6102.
+    #[serde(rename = "alarmHandle", default, skip_serializing_if = "Option::is_none")]
+    pub alarm_handle: Option<AlarmHandle>,
 }
 
 /// TimeBlockList XML

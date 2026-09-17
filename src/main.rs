@@ -43,7 +43,12 @@ mod config;
 #[cfg(feature = "gstreamer")]
 mod image;
 mod mqtt;
+mod aidetect;
+mod apply;
+mod osd;
 mod pir;
+mod probe;
+mod vitals;
 mod ptz;
 mod reboot;
 #[cfg(feature = "gstreamer")]
@@ -114,6 +119,21 @@ async fn main() -> Result<()> {
         }
         Some(Command::Reboot(opts)) => {
             reboot::main(opts, neo_reactor.clone()).await?;
+        }
+        Some(Command::AiDetect(opts)) => {
+            aidetect::main(opts, neo_reactor.clone()).await?;
+        }
+        Some(Command::Vitals(opts)) => {
+            vitals::main(opts, neo_reactor.clone()).await?;
+        }
+        Some(Command::Apply(opts)) => {
+            apply::main(opts, neo_reactor.clone()).await?;
+        }
+        Some(Command::Probe(opts)) => {
+            probe::main(opts, neo_reactor.clone()).await?;
+        }
+        Some(Command::Osd(opts)) => {
+            osd::main(opts, neo_reactor.clone()).await?;
         }
         Some(Command::Pir(opts)) => {
             pir::main(opts, neo_reactor.clone()).await?;

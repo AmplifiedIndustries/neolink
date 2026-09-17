@@ -22,6 +22,11 @@ pub enum Command {
     StatusLight(super::statusled::Opt),
     Reboot(super::reboot::Opt),
     Pir(super::pir::Opt),
+    AiDetect(super::aidetect::Opt),
+    Vitals(super::vitals::Opt),
+    Apply(super::apply::Opt),
+    Probe(super::probe::Opt),
+    Osd(super::osd::Opt),
     Ptz(super::ptz::Opt),
     #[cfg(feature = "gstreamer")]
     Talk(super::talk::Opt),

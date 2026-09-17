@@ -20,4 +20,10 @@ pub struct Opt {
     /// Whether to turn the PIR ON or OFF
     #[arg(value_parser = onoff_parse, action = clap::ArgAction::Set, name = "on|off")]
     pub on: Option<bool>,
+    /// PIR sensitivity to set, as the camera's own sensiValue scale.
+    ///
+    /// Sent in the same rfAlarmCfg message as the on/off switch, so it can be combined with it or
+    /// given on its own. Omit both to read the current configuration instead.
+    #[arg(long)]
+    pub sensitivity: Option<u8>,
 }

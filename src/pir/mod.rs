@@ -11,6 +11,10 @@
 /// neolink pir --config=config.toml CameraName on
 /// # Or off
 /// neolink pir --config=config.toml CameraName off
+/// # To change the sensitivity, with or without a state change
+/// neolink pir --config=config.toml CameraName --sensitivity 30
+/// # To read the current configuration
+/// neolink pir --config=config.toml CameraName
 /// ```
 ///
 use anyhow::{Context, Result};
@@ -26,11 +30,24 @@ pub(crate) use cmdline::Opt;
 pub(crate) async fn main(opt: Opt, reactor: NeoReactor) -> Result<()> {
     let camera = reactor.get(&opt.camera).await?;
 
-    if let Some(on) = opt.on {
+    if opt.on.is_some() || opt.sensitivity.is_some() {
+        // One get-modify-set for both fields: they live in the same rfAlarmCfg message, so
+        // applying them separately would wake the camera twice and race on the second read.
+        let (on, sensitivity) = (opt.on, opt.sensitivity);
         camera
-            .run_task(|cam| {
+            .run_task(move |cam| {
                 Box::pin(async move {
-                    cam.pir_set(on)
+                    let mut pir_state = cam
+                        .get_pirstate()
+                        .await
+                        .context("Unable to read camera PIR state before changing it")?;
+                    if let Some(on) = on {
+                        pir_state.enable = u8::from(on);
+                    }
+                    if let Some(sensitivity) = sensitivity {
+                        pir_state.sensiValue = sensitivity;
+                    }
+                    cam.set_pirstate(pir_state)
                         .await
                         .context("Unable to set camera PIR state")
                 })
