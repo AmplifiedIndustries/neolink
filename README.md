@@ -2,6 +2,33 @@
 
 Neolink bridges Reolink cameras that only speak the Baichuan protocol (port 9000) to RTSP clients like Frigate, Shinobi and Blue Iris.
 
+## Modifications by Amplified Industries
+
+This repository is **Amplified Industries' fork of [vertoforce/neolink](https://github.com/vertoforce/neolink)**,
+which is itself a fork of [QuantumEntangledAndy/neolink](https://github.com/QuantumEntangledAndy/neolink).
+Our changes are on the `amplified` branch, on top of upstream commit `c829324`.
+
+Changed by Amplified Industries in September 2026. What we add, all of it Baichuan messages that
+Reolink does not document and that upstream had no need for:
+
+- FTP configuration and its per-trigger upload schedule
+- Cellular identity and link status for 4G cameras (ICCID, IMEI, signal, operator)
+- The video overlay: camera name, name visibility, logo watermark
+- AI detection settings, with every field the message carries -- the target-size bounds and the
+  base64 detection-zone grid included, because these messages are written back whole and modelling
+  a subset silently erases the rest
+- Image settings (anti-flicker)
+- `probe`, which sends raw message ids and prints the reply -- how each of the above was identified
+- `vitals`, which reads the lot in one camera session
+- `apply`, which writes several settings in one camera session
+
+The last two exist for battery cameras, where each connection wakes the device: they turn a
+screenful of changes into one wake instead of one per setting.
+
+These modifications are licensed **AGPL-3.0-or-later**, like the rest of this program. They are
+published here because the AGPL asks for the source of a modified version, and publishing it is
+simpler than arguing about whether the network clause applies to our use.
+
 ## Why this fork
 
 Upstream has had no commit since 2025-01-30 and its open pull requests are unreviewed.
