@@ -45,7 +45,13 @@ pub(crate) async fn main(opt: Opt, reactor: NeoReactor) -> Result<()> {
         opt.osd_show_name,
         opt.osd_set_cmd_id,
     );
-    let touches_osd = osd_name.is_some() || osd_watermark.is_some() || osd_show_name.is_some();
+    let osd_show_time = opt.osd_show_time;
+
+    // The two halves of the overlay are tracked apart so a write only demands the struct it
+    // actually changes: a camera with no OsdChannelName can still have its timestamp moved.
+    let touches_osd_name = osd_name.is_some() || osd_watermark.is_some() || osd_show_name.is_some();
+    let touches_osd_time = osd_show_time.is_some();
+    let touches_osd = touches_osd_name || touches_osd_time;
     let (ftp_interval, ftp_triggers, ftp_set_cmd_id, anti_flicker) = (
         opt.ftp_interval,
         opt.ftp_triggers.clone(),
@@ -183,17 +189,28 @@ pub(crate) async fn main(opt: Opt, reactor: NeoReactor) -> Result<()> {
                         .get_osd()
                         .await
                         .context("Unable to read the OSD configuration before changing it")?;
-                    let channel_name = osd.channel_name.as_mut().context(
-                        "This camera reports no OsdChannelName, so it has no name or watermark to set",
-                    )?;
-                    if let Some(name) = osd_name {
-                        channel_name.name = Some(name);
+                    if touches_osd_name {
+                        let channel_name = osd.channel_name.as_mut().context(
+                            "This camera reports no OsdChannelName, so it has no name or watermark to set",
+                        )?;
+                        if let Some(name) = osd_name {
+                            channel_name.name = Some(name);
+                        }
+                        if let Some(watermark) = osd_watermark {
+                            channel_name.en_watermark = Some(u8::from(watermark));
+                        }
+                        if let Some(show_name) = osd_show_name {
+                            channel_name.enable = Some(u8::from(show_name));
+                        }
                     }
-                    if let Some(watermark) = osd_watermark {
-                        channel_name.en_watermark = Some(u8::from(watermark));
-                    }
-                    if let Some(show_name) = osd_show_name {
-                        channel_name.enable = Some(u8::from(show_name));
+
+                    if touches_osd_time {
+                        let datetime = osd.datetime.as_mut().context(
+                            "This camera reports no OsdDatetime, so it has no timestamp overlay to set",
+                        )?;
+                        if let Some(show_time) = osd_show_time {
+                            datetime.enable = Some(u8::from(show_time));
+                        }
                     }
                     cam.set_osd(osd, osd_set_cmd_id)
                         .await

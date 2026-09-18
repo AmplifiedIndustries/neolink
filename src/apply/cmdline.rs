@@ -96,6 +96,9 @@ pub struct Opt {
     /// Whether the name overlay is drawn at all
     #[arg(long, value_parser = onoff_parse)]
     pub osd_show_name: Option<bool>,
+    /// Whether the timestamp overlay is drawn at all
+    #[arg(long, value_parser = onoff_parse)]
+    pub osd_show_time: Option<bool>,
     /// Message id to write the overlay with; see the osd subcommand
     #[arg(long, default_value = "45")]
     pub osd_set_cmd_id: u32,
