@@ -1,0 +1,61 @@
+# Bookworm build of the `neolink` binary WITHOUT GStreamer.
+#
+# The Amplified GraphQL API ships this one. It calls `vitals`, `apply`, `users`, `reboot`,
+# `image` (SNAP command) and `stream`, and none of them needs GStreamer: `stream`'s MPEG-TS
+# muxer is hand-rolled Rust, and `image` only needs it for `--use_stream`.
+#
+# Why not Dockerfile.stream-bookworm: linking GStreamer means installing it, and on Debian
+# `libgstrtspserver-1.0-0` hard-depends on plugins-base, -good AND -bad. Their closure is
+# about 300 packages (libcurl, openexr, libxml2, cups, avahi, ...), and in 2026-09 it
+# carried every CRITICAL and most HIGH OS-package CVEs in the GraphQL image. See
+# AmplifiedIndustries/monorepo#17132.
+#
+# What a `--no-default-features` build gives up:
+#   - `rtsp`, `talk`, `mqtt-rtsp`, and `image --use_stream`
+#   - the ADPCM -> AAC transcode in `stream`. An AAC camera still streams its audio
+#     verbatim; an ADPCM camera streams video only (see src/stream/aac_nogst.rs).
+#
+# Bookworm for the same reason as Dockerfile.stream-bookworm: glibc is backward and not
+# forward compatible, so a bookworm-built binary runs on both bookworm and trixie bases.
+#
+# Build:  docker build -f Dockerfile.nogst-bookworm -t neolink:nogst-bookworm .
+FROM docker.io/rust:slim-bookworm@sha256:ebd900bae66fd508b466cef82d64a83a5fb34682e4c8b2797a42908bddc95a57 AS build
+
+ENV DEBIAN_FRONTEND=noninteractive
+WORKDIR /usr/local/src/neolink
+COPY . /usr/local/src/neolink
+
+# hadolint ignore=DL3008
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      build-essential \
+      pkg-config \
+      libssl-dev \
+      ca-certificates \
+      protobuf-compiler && \
+    apt-get clean -y && rm -rf /var/lib/apt/lists/* && \
+    cargo build --release --no-default-features
+
+# Optional target: `docker build -f Dockerfile.nogst-bookworm --target test .` runs the
+# stream-module unit tests that do not need GStreamer (clock/anchor/layout and muxer).
+FROM build AS test
+RUN cargo test --release --no-default-features stream:: > /tmp/stream-tests.log 2>&1 \
+      || { tail -60 /tmp/stream-tests.log ; exit 1 ; } ; \
+    tail -30 /tmp/stream-tests.log
+
+FROM docker.io/debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
+
+# hadolint ignore=DL3008
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    apt-get clean -y && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build \
+  /usr/local/src/neolink/target/release/neolink \
+  /usr/local/bin/neolink
+
+# Fails the image, not the first camera call downstream, if a GStreamer link sneaks back in.
+RUN chmod +x /usr/local/bin/neolink && /usr/local/bin/neolink --version && \
+    if ldd /usr/local/bin/neolink | grep -q gst ; then \
+      echo "neolink links GStreamer; this build must not" >&2 ; ldd /usr/local/bin/neolink >&2 ; exit 1 ; \
+    fi
