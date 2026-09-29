@@ -40,7 +40,6 @@ mod battery;
 mod cmdline;
 mod common;
 mod config;
-#[cfg(feature = "gstreamer")]
 mod image;
 mod mqtt;
 mod aidetect;
@@ -155,7 +154,6 @@ async fn main() -> Result<()> {
                 v = rtsp::main(rtsp::Opt {}, neo_reactor.clone()) => v,
             }?;
         }
-        #[cfg(feature = "gstreamer")]
         Some(Command::Image(opts)) => {
             image::main(opts, neo_reactor.clone()).await?;
         }

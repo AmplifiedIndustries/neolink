@@ -33,7 +33,6 @@ pub enum Command {
     Mqtt(super::mqtt::Opt),
     #[cfg(feature = "gstreamer")]
     MqttRtsp(super::mqtt::Opt),
-    #[cfg(feature = "gstreamer")]
     Image(super::image::Opt),
     Battery(super::battery::Opt),
     Services(super::services::Opt),

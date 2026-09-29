@@ -17,19 +17,19 @@
 /// neolink image --config=config.toml --use_stream --file-path=filepath CameraName
 /// ```
 ///
-use anyhow::{anyhow, Result};
+// Only `--use_stream` needs GStreamer, to decode a frame into a JPEG. The
+// default path asks the camera for a JPEG with the SNAP command, so the
+// subcommand stays available in a `--no-default-features` build and only
+// `--use_stream` is refused there.
+use anyhow::Result;
 use log::*;
-use neolink_core::{
-    bc_protocol::*,
-    bcmedia::model::{BcMedia, BcMediaIframe, BcMediaPframe},
-};
-use std::sync::Arc;
-use tokio::{fs::File, io::AsyncWriteExt, sync::RwLock};
+use tokio::{fs::File, io::AsyncWriteExt};
 
 mod cmdline;
+#[cfg(feature = "gstreamer")]
 mod gst;
 
-use crate::common::NeoReactor;
+use crate::common::{NeoInstance, NeoReactor};
 pub(crate) use cmdline::Opt;
 
 /// Entry point for the image subcommand
@@ -39,85 +39,113 @@ pub(crate) async fn main(opt: Opt, reactor: NeoReactor) -> Result<()> {
     let camera = reactor.get(&opt.camera).await?;
 
     if opt.use_stream {
-        let (stream_data_tx, mut stream_data_rx) = tokio::sync::mpsc::channel(100);
+        from_stream(camera, &opt).await
+    } else {
+        from_snap(camera, &opt).await
+    }
+}
 
-        // Spawn a video stream
-        let thread_camera = camera.clone();
-        let (stream_type_tx, stream_type_rx) = tokio::sync::oneshot::channel();
-        let stream_type_tx = Arc::new(RwLock::new(Some(stream_type_tx)));
-        tokio::task::spawn(async move {
-            thread_camera
-                .run_task(|cam| {
-                    let stream_type_tx = stream_type_tx.clone();
-                    let stream_data_tx = stream_data_tx.clone();
+/// Ask the camera for a JPEG with the SNAP command
+async fn from_snap(camera: NeoInstance, opt: &Opt) -> Result<()> {
+    debug!("Using the snap command");
+    let file_path = opt.file_path.with_extension("jpeg");
+    let mut buffer = File::create(file_path).await?;
+    let jpeg_data = camera
+        .run_task(|camera| Box::pin(async move { Ok(camera.get_snapshot().await?) }))
+        .await;
+    if jpeg_data.is_err() {
+        log::debug!("jpeg_data: {:?}", jpeg_data);
+    }
+    let jpeg_data = jpeg_data?;
+    buffer.write_all(jpeg_data.as_slice()).await?;
+    Ok(())
+}
 
-                    Box::pin(async move {
-                        let mut stream = cam.start_video(StreamKind::Main, 100, false).await?;
-                        while let Ok(frame) = stream.get_data().await {
-                            let frame = frame?;
-                            match frame {
-                                BcMedia::Iframe(BcMediaIframe {
-                                    data, video_type, ..
-                                })
-                                | BcMedia::Pframe(BcMediaPframe {
-                                    data, video_type, ..
-                                }) => {
-                                    if let Some(stream_type_tx) =
-                                        stream_type_tx.write().await.take()
-                                    {
-                                        let _ = stream_type_tx.send(video_type);
-                                    }
-                                    stream_data_tx.send(Arc::new(data)).await?;
+/// Without GStreamer there is nothing to decode a frame with
+#[cfg(not(feature = "gstreamer"))]
+async fn from_stream(_camera: NeoInstance, _opt: &Opt) -> Result<()> {
+    Err(anyhow::anyhow!(
+        "this binary was built without the `gstreamer` feature, so --use_stream is unavailable; \
+         drop it to use the camera's SNAP command"
+    ))
+}
+
+/// Play the stream and transcode the first decodable frame into a JPEG
+#[cfg(feature = "gstreamer")]
+async fn from_stream(camera: NeoInstance, opt: &Opt) -> Result<()> {
+    use anyhow::anyhow;
+    use neolink_core::{
+        bc_protocol::*,
+        bcmedia::model::{BcMedia, BcMediaIframe, BcMediaPframe},
+    };
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    let (stream_data_tx, mut stream_data_rx) = tokio::sync::mpsc::channel(100);
+
+    // Spawn a video stream
+    let thread_camera = camera.clone();
+    let (stream_type_tx, stream_type_rx) = tokio::sync::oneshot::channel();
+    let stream_type_tx = Arc::new(RwLock::new(Some(stream_type_tx)));
+    tokio::task::spawn(async move {
+        thread_camera
+            .run_task(|cam| {
+                let stream_type_tx = stream_type_tx.clone();
+                let stream_data_tx = stream_data_tx.clone();
+
+                Box::pin(async move {
+                    let mut stream = cam.start_video(StreamKind::Main, 100, false).await?;
+                    while let Ok(frame) = stream.get_data().await {
+                        let frame = frame?;
+                        match frame {
+                            BcMedia::Iframe(BcMediaIframe {
+                                data, video_type, ..
+                            })
+                            | BcMedia::Pframe(BcMediaPframe {
+                                data, video_type, ..
+                            }) => {
+                                if let Some(stream_type_tx) =
+                                    stream_type_tx.write().await.take()
+                                {
+                                    let _ = stream_type_tx.send(video_type);
                                 }
-                                _ => {}
+                                stream_data_tx.send(Arc::new(data)).await?;
                             }
+                            _ => {}
                         }
-                        Result::Ok(())
-                    })
+                    }
+                    Result::Ok(())
                 })
-                .await
-        });
-
-        let vid_type = stream_type_rx.await?;
-        let buf = stream_data_rx
-            .recv()
+            })
             .await
-            .ok_or(anyhow!("No frames recieved"))?;
+    });
 
-        let mut sender = gst::from_input(vid_type, &opt.file_path).await?;
-        sender.send(buf).await?; // Send first iframe
+    let vid_type = stream_type_rx.await?;
+    let buf = stream_data_rx
+        .recv()
+        .await
+        .ok_or(anyhow!("No frames recieved"))?;
 
-        // Keep sending both IFrame or PFrame until finished
-        while sender.is_finished().await.is_none() {
-            if let Some(buf) = stream_data_rx.recv().await {
-                debug!("Sending frame data to gstreamer");
-                if sender.send(buf).await.is_err() {
-                    // Assume that the sender is closed
-                    // because the pipeline is finished
-                    break;
-                }
-            } else {
-                log::error!("Camera stopped sending frames before decoding could complete");
+    let mut sender = gst::from_input(vid_type, &opt.file_path).await?;
+    sender.send(buf).await?; // Send first iframe
+
+    // Keep sending both IFrame or PFrame until finished
+    while sender.is_finished().await.is_none() {
+        if let Some(buf) = stream_data_rx.recv().await {
+            debug!("Sending frame data to gstreamer");
+            if sender.send(buf).await.is_err() {
+                // Assume that the sender is closed
+                // because the pipeline is finished
                 break;
             }
+        } else {
+            log::error!("Camera stopped sending frames before decoding could complete");
+            break;
         }
-        debug!("Sending EOS");
-        let _ = sender.eos().await; // Ignore return because if pipeline is finished this will error
-        let _ = sender.join().await;
-    } else {
-        // Simply use the snap command
-        debug!("Using the snap command");
-        let file_path = opt.file_path.with_extension("jpeg");
-        let mut buffer = File::create(file_path).await?;
-        let jpeg_data = camera
-            .run_task(|camera| Box::pin(async move { Ok(camera.get_snapshot().await?) }))
-            .await;
-        if jpeg_data.is_err() {
-            log::debug!("jpeg_data: {:?}", jpeg_data);
-        }
-        let jpeg_data = jpeg_data?;
-        buffer.write_all(jpeg_data.as_slice()).await?;
     }
+    debug!("Sending EOS");
+    let _ = sender.eos().await; // Ignore return because if pipeline is finished this will error
+    let _ = sender.join().await;
 
     Ok(())
 }
