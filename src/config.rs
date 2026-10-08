@@ -180,6 +180,14 @@ pub(crate) struct CameraConfig {
     #[serde(default = "default_update_time", alias = "time")]
     pub(crate) update_time: bool,
 
+    /// Read the camera clock after login, and set it when the camera has none
+    #[serde(default = "default_true")]
+    pub(crate) check_time: bool,
+
+    /// Pause before and after the clock check, for cameras that error while still waking
+    #[serde(default = "default_startup_settle_ms")]
+    pub(crate) startup_settle_ms: u64,
+
     #[validate(range(
         min = 1,
         max = 15000,
@@ -467,6 +475,10 @@ fn default_channel_id() -> u8 {
 
 fn default_update_time() -> bool {
     false
+}
+
+fn default_startup_settle_ms() -> u64 {
+    2000
 }
 
 fn default_motion_timeout() -> f64 {

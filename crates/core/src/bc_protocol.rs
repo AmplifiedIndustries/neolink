@@ -86,6 +86,15 @@ pub struct BcCamera {
     cancel: CancellationToken,
 }
 
+/// Timeouts for the first registration attempts with the Reolink servers, then the cap for every
+/// later one.
+const REGISTRATION_ATTEMPT_TIMEOUTS: [std::time::Duration; 3] = [
+    std::time::Duration::from_secs(3),
+    std::time::Duration::from_secs(5),
+    std::time::Duration::from_secs(8),
+];
+const REGISTRATION_ATTEMPT_TIMEOUT_MAX: std::time::Duration = std::time::Duration::from_secs(15);
+
 /// Options used to construct a camera
 #[derive(Debug)]
 pub struct BcCameraOpt {
@@ -238,7 +247,19 @@ impl BcCamera {
                     let max_retry: usize = options.max_discovery_retries;
                     loop {
                         tokio::task::yield_now().await;
-                        if let Ok(result) = discovery.get_registration(uid).await {
+                        // A camera Reolink has not heard from lately fails its first registration,
+                        // and left alone that failure takes the lookup and registration timeouts,
+                        // about 30 s. Short early attempts let the retry that succeeds come sooner.
+                        let attempt_timeout = REGISTRATION_ATTEMPT_TIMEOUTS
+                            .get(retry)
+                            .copied()
+                            .unwrap_or(REGISTRATION_ATTEMPT_TIMEOUT_MAX);
+                        if let Ok(Ok(result)) = tokio::time::timeout(
+                            attempt_timeout,
+                            discovery.get_registration(uid),
+                        )
+                        .await
+                        {
                             reg_result = result;
                             break;
                         }
@@ -247,7 +268,7 @@ impl BcCamera {
                         }
                         log::info!("{}: Registration with reolink servers failed. Retrying: {}/{}", options.name, retry + 1, if max_retry > 0 {format!("{}", max_retry)} else {"infinite".to_string()});
                         retry += 1;
-                        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                        tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
                         // New discovery to get new client IDs
                         discovery = Discovery::new().await?;
                     };
