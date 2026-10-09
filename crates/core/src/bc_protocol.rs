@@ -86,14 +86,8 @@ pub struct BcCamera {
     cancel: CancellationToken,
 }
 
-/// Timeouts for the first registration attempts with the Reolink servers, then the cap for every
-/// later one.
-const REGISTRATION_ATTEMPT_TIMEOUTS: [std::time::Duration; 3] = [
-    std::time::Duration::from_secs(3),
-    std::time::Duration::from_secs(5),
-    std::time::Duration::from_secs(8),
-];
-const REGISTRATION_ATTEMPT_TIMEOUT_MAX: std::time::Duration = std::time::Duration::from_secs(15);
+/// How long a registration attempt runs alone before another starts beside it.
+const REGISTRATION_ATTEMPT_OVERLAP: std::time::Duration = std::time::Duration::from_secs(8);
 
 /// Options used to construct a camera
 #[derive(Debug)]
@@ -234,43 +228,56 @@ impl BcCamera {
                     }
                 }, if allow_local => Ok(v),
                 Ok(v) = async {
-                    let mut discovery = Discovery::new().await?;
-                    let reg_result;
                     // Registration is looped as it seems that reolink
                     // only updates the registration lazily when someone attempts
                     // to connect. The first few connects fails until the server data
                     // is updated
                     //
-                    // We loop infinitly and allow the caller to timeout at the
-                    // interval they desire
-                    let mut retry = 0;
+                    // Attempts overlap instead of restarting. A registration that succeeds can take
+                    // 4 to 10 s, so cutting one short only throws its progress away; but an idle
+                    // camera's first attempt fails only after about 30 s. A fresh attempt starts
+                    // every REGISTRATION_ATTEMPT_OVERLAP alongside the ones still running, and the
+                    // first to succeed wins.
                     let max_retry: usize = options.max_discovery_retries;
-                    loop {
-                        tokio::task::yield_now().await;
-                        // A camera Reolink has not heard from lately fails its first registration,
-                        // and left alone that failure takes the lookup and registration timeouts,
-                        // about 30 s. Short early attempts let the retry that succeeds come sooner.
-                        let attempt_timeout = REGISTRATION_ATTEMPT_TIMEOUTS
-                            .get(retry)
-                            .copied()
-                            .unwrap_or(REGISTRATION_ATTEMPT_TIMEOUT_MAX);
-                        if let Ok(Ok(result)) = tokio::time::timeout(
-                            attempt_timeout,
-                            discovery.get_registration(uid),
-                        )
-                        .await
-                        {
-                            reg_result = result;
-                            break;
+                    let mut attempts = futures::stream::FuturesUnordered::new();
+                    let mut started: usize = 0;
+                    let mut next_start = tokio::time::Instant::now();
+                    let (reg_result, discovery) = loop {
+                        let may_start = max_retry == 0 || started <= max_retry;
+                        if may_start && tokio::time::Instant::now() >= next_start {
+                            if started > 0 {
+                                log::info!(
+                                    "{}: Registration with reolink servers still pending, starting attempt {}",
+                                    options.name,
+                                    started + 1
+                                );
+                            }
+                            // A new discovery for every attempt, to get new client IDs
+                            let attempt_discovery = Discovery::new().await?;
+                            let attempt_uid = uid.clone();
+                            attempts.push(async move {
+                                let result = attempt_discovery.get_registration(&attempt_uid).await;
+                                (result, attempt_discovery)
+                            });
+                            started += 1;
+                            next_start = tokio::time::Instant::now() + REGISTRATION_ATTEMPT_OVERLAP;
                         }
-                        if retry >= max_retry && max_retry > 0 {
-                            return Err(Error::DiscoveryTimeout);
+                        tokio::select! {
+                            Some((result, attempt_discovery)) = attempts.next() => {
+                                match result {
+                                    Ok(result) => break (result, attempt_discovery),
+                                    Err(_) => {
+                                        log::info!("{}: Registration with reolink servers failed", options.name);
+                                        if attempts.is_empty() {
+                                            // Nothing left running: start the next attempt now.
+                                            next_start = tokio::time::Instant::now();
+                                        }
+                                    }
+                                }
+                            }
+                            _ = tokio::time::sleep_until(next_start), if may_start => {}
+                            else => return Err(Error::DiscoveryTimeout),
                         }
-                        log::info!("{}: Registration with reolink servers failed. Retrying: {}/{}", options.name, retry + 1, if max_retry > 0 {format!("{}", max_retry)} else {"infinite".to_string()});
-                        retry += 1;
-                        tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
-                        // New discovery to get new client IDs
-                        discovery = Discovery::new().await?;
                     };
                     tokio::select! {
                         Ok(v) = async {
