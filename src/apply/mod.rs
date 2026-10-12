@@ -86,6 +86,9 @@ pub(crate) async fn main(opt: Opt, reactor: NeoReactor) -> Result<()> {
         || ftp_auto_dir.is_some()
         || ftp_stream_type.is_some();
     let touches_triggers = !ftp_triggers.is_empty();
+    let ftp_enable = opt.ftp_enable;
+    // The triggers and the on/off switch are one FtpTask message, so either means one write.
+    let touches_task = touches_triggers || ftp_enable.is_some();
 
     // Every per-type change, gathered by object type. Collapsing them here rather than looping per
     // flag is what keeps a type to a single read-modify-write: the camera merges, but each extra
@@ -115,7 +118,7 @@ pub(crate) async fn main(opt: Opt, reactor: NeoReactor) -> Result<()> {
         && ai_changes.is_empty()
         && !touches_osd
         && !touches_ftp
-        && !touches_triggers
+        && !touches_task
         && anti_flicker.is_none()
     {
         // Writing nothing would still wake the camera, so refuse rather than spend the battery.
@@ -266,29 +269,34 @@ pub(crate) async fn main(opt: Opt, reactor: NeoReactor) -> Result<()> {
                         .context("Unable to set the FTP configuration")?;
                 }
 
-                if touches_triggers {
+                if touches_task {
                     let mut task = cam
                         .get_ftp_task()
                         .await
                         .context("Unable to read the FTP trigger schedule before changing it")?;
-                    let list = task.type_schedule_list.as_mut().context(
-                        "This camera reports no FTP trigger schedule, so there is nothing to toggle",
-                    )?;
-                    for setting in ftp_triggers.iter() {
-                        let item = list
-                            .item
-                            .iter_mut()
-                            .find(|item| item.trigger_type == setting.trigger_type)
-                            .with_context(|| {
-                                format!("This camera has no FTP trigger {}", setting.trigger_type)
-                            })?;
-                        // The table is one digit per hour of the week. Turning a trigger on means
-                        // every hour, off means none: the hours themselves are deliberately not
-                        // exposed, so there is no partial schedule to preserve.
-                        let digit = if setting.enabled { '1' } else { '0' };
-                        item.value_table = std::iter::repeat(digit)
-                            .take(item.value_table.chars().count())
-                            .collect();
+                    if let Some(on) = ftp_enable {
+                        task.enable = Some(u8::from(on));
+                    }
+                    if touches_triggers {
+                        let list = task.type_schedule_list.as_mut().context(
+                            "This camera reports no FTP trigger schedule, so there is nothing to toggle",
+                        )?;
+                        for setting in ftp_triggers.iter() {
+                            let item = list
+                                .item
+                                .iter_mut()
+                                .find(|item| item.trigger_type == setting.trigger_type)
+                                .with_context(|| {
+                                    format!("This camera has no FTP trigger {}", setting.trigger_type)
+                                })?;
+                            // The table is one digit per hour of the week. Turning a trigger on means
+                            // every hour, off means none: the hours themselves are deliberately not
+                            // exposed, so there is no partial schedule to preserve.
+                            let digit = if setting.enabled { '1' } else { '0' };
+                            item.value_table = std::iter::repeat(digit)
+                                .take(item.value_table.chars().count())
+                                .collect();
+                        }
                     }
                     cam.set_ftp_task(task)
                         .await
