@@ -142,6 +142,10 @@ pub struct Opt {
     /// Turn one FTP trigger on or off, written `people=on`. Repeatable
     #[arg(long = "ftp-trigger", value_parser = trigger_parse)]
     pub ftp_triggers: Vec<TriggerSetting>,
+    /// Turn FTP upload as a whole on or off: the switch the Reolink app shows above the triggers.
+    /// Off, the camera uploads nothing whatever its triggers and server say
+    #[arg(long, value_parser = onoff_parse)]
+    pub ftp_enable: Option<bool>,
     /// Message id to write the FTP configuration with
     #[arg(long, default_value = "69")]
     pub ftp_set_cmd_id: u32,
