@@ -12,12 +12,22 @@
 /// Each setting is still a read-modify-write of its own message, because that is how the camera
 /// works -- sending only the field that changed would reset the ones beside it.
 ///
+/// A whole configuration can be pushed without reading the camera first: `--ai-zone-full` and
+/// `--ftp-trigger-all` size themselves from the camera's own answer inside the session,
+/// `--ai-optional` skips the object types a model lacks, `--report` prints what `vitals` prints
+/// once the writes are done, and `--new-password` changes the password as the very last step.
+/// Together they turn a new camera's setup into one wake instead of five.
+///
 /// # Usage
 ///
 /// ```bash
 /// neolink apply --config=config.toml CameraName --pir on --pir-sensitivity 26 --ai people=30 --ai vehicle=45
+/// neolink apply --config=config.toml CameraName --ai people=60 --ai-zone-full people --ai-optional \
+///     --ftp-trigger-all on --report --new-password-user admin --new-password hunter2
 /// ```
 use anyhow::{Context, Result};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use neolink_core::bc::xml::AiDetectCfg;
 
 /// Every change requested for one AI object type, so the type is read and written exactly once.
 #[derive(Clone, Debug, Default)]
@@ -28,6 +38,23 @@ struct AiChange {
     min_height: Option<String>,
     max_width: Option<String>,
     max_height: Option<String>,
+    full_zone: bool,
+}
+
+/// Every cell of the detection grid on, at the length the camera's own zone already has, or from
+/// the grid size when it sent none. None when the camera reports neither.
+fn full_zone(cfg: &AiDetectCfg) -> Option<String> {
+    let current = cfg
+        .area
+        .as_deref()
+        .and_then(|area| BASE64.decode(area).ok())
+        .map(|bytes| bytes.len())
+        .filter(|len| *len > 0);
+    let len = match current {
+        Some(len) => len,
+        None => (cfg.width? as usize * cfg.height? as usize).div_ceil(8),
+    };
+    Some(BASE64.encode(vec![0xFF_u8; len]))
 }
 
 mod cmdline;
@@ -85,8 +112,14 @@ pub(crate) async fn main(opt: Opt, reactor: NeoReactor) -> Result<()> {
         || ftp_version.is_some()
         || ftp_auto_dir.is_some()
         || ftp_stream_type.is_some();
-    let touches_triggers = !ftp_triggers.is_empty();
+    let ftp_trigger_all = opt.ftp_trigger_all;
+    let touches_triggers = !ftp_triggers.is_empty() || ftp_trigger_all.is_some();
     let ftp_enable = opt.ftp_enable;
+    let ai_optional = opt.ai_optional;
+    let report = opt.report;
+    let report_ai_types = crate::vitals::parse_ai_types(&opt.report_ai_types);
+    let (new_password, new_password_user) =
+        (opt.new_password.clone(), opt.new_password_user.clone());
     // The triggers and the on/off switch are one FtpTask message, so either means one write.
     let touches_task = touches_triggers || ftp_enable.is_some();
 
@@ -112,6 +145,9 @@ pub(crate) async fn main(opt: Opt, reactor: NeoReactor) -> Result<()> {
     for entry in &opt.ai_max_height {
         ai_changes.entry(entry.ai_type.clone()).or_default().max_height = Some(entry.value.clone());
     }
+    for ai_type in &opt.ai_zone_full {
+        ai_changes.entry(ai_type.clone()).or_default().full_zone = true;
+    }
 
     if pir.is_none()
         && pir_sensitivity.is_none()
@@ -120,6 +156,7 @@ pub(crate) async fn main(opt: Opt, reactor: NeoReactor) -> Result<()> {
         && !touches_ftp
         && !touches_task
         && anti_flicker.is_none()
+        && new_password.is_none()
     {
         // Writing nothing would still wake the camera, so refuse rather than spend the battery.
         return Err(anyhow::anyhow!(
@@ -127,9 +164,12 @@ pub(crate) async fn main(opt: Opt, reactor: NeoReactor) -> Result<()> {
         ));
     }
 
-    camera
+    let reading = camera
         .run_task(move |cam| {
             let ai_changes = ai_changes.clone();
+            let report_ai_types = report_ai_types.clone();
+            let new_password = new_password.clone();
+            let new_password_user = new_password_user.clone();
             let osd_name = osd_name.clone();
             let ftp_triggers = ftp_triggers.clone();
             let anti_flicker = anti_flicker.clone();
@@ -155,15 +195,21 @@ pub(crate) async fn main(opt: Opt, reactor: NeoReactor) -> Result<()> {
                 }
 
                 for (ai_type, change) in ai_changes.iter() {
-                    let mut cfg = cam
-                        .get_ai_detect_cfg(ai_type)
-                        .await
-                        .with_context(|| {
-                            format!(
-                                "Unable to read the {} AI configuration before changing it",
-                                ai_type
-                            )
-                        })?;
+                    let mut cfg = match cam.get_ai_detect_cfg(ai_type).await {
+                        Ok(cfg) => cfg,
+                        Err(err) if ai_optional => {
+                            log::info!("Skipping AI type {} the camera refused: {:?}", ai_type, err);
+                            continue;
+                        }
+                        Err(err) => {
+                            return Err(err).with_context(|| {
+                                format!(
+                                    "Unable to read the {} AI configuration before changing it",
+                                    ai_type
+                                )
+                            })
+                        }
+                    };
                     if let Some(sensitivity) = change.sensitivity {
                         cfg.sensitivity = Some(sensitivity);
                     }
@@ -181,6 +227,11 @@ pub(crate) async fn main(opt: Opt, reactor: NeoReactor) -> Result<()> {
                     }
                     if let Some(value) = change.max_height.clone() {
                         cfg.max_target_height = Some(value);
+                    }
+                    if change.full_zone {
+                        cfg.area = Some(full_zone(&cfg).with_context(|| {
+                            format!("The camera reports no detection grid for {}", ai_type)
+                        })?);
                     }
                     cam.set_ai_detect_cfg(cfg).await.with_context(|| {
                         format!("Unable to set the {} AI configuration", ai_type)
@@ -281,6 +332,14 @@ pub(crate) async fn main(opt: Opt, reactor: NeoReactor) -> Result<()> {
                         let list = task.type_schedule_list.as_mut().context(
                             "This camera reports no FTP trigger schedule, so there is nothing to toggle",
                         )?;
+                        if let Some(on) = ftp_trigger_all {
+                            let digit = if on { '1' } else { '0' };
+                            for item in list.item.iter_mut() {
+                                item.value_table = std::iter::repeat(digit)
+                                    .take(item.value_table.chars().count())
+                                    .collect();
+                            }
+                        }
                         for setting in ftp_triggers.iter() {
                             let item = list
                                 .item
@@ -321,10 +380,28 @@ pub(crate) async fn main(opt: Opt, reactor: NeoReactor) -> Result<()> {
                         .context("Unable to set the image settings")?;
                 }
 
-                Ok(())
+                let reading = if report {
+                    Some(crate::vitals::read_parts(cam, &report_ai_types).await?)
+                } else {
+                    None
+                };
+
+                // Last, so every write above and the report have gone through before the password
+                // the session logged in with stops being the camera's.
+                if let (Some(user), Some(password)) = (new_password_user, new_password) {
+                    cam.modify_user(user, password)
+                        .await
+                        .context("Unable to change the camera password")?;
+                }
+
+                Ok(reading)
             })
         })
         .await?;
+
+    for part in reading.into_iter().flatten() {
+        println!("{}", part);
+    }
 
     Ok(())
 }

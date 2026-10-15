@@ -22,6 +22,7 @@
 /// ```
 use anyhow::{Context, Result};
 use futures::{future::BoxFuture, stream, FutureExt, StreamExt};
+use neolink_core::bc_protocol::BcCamera;
 
 mod cmdline;
 
@@ -42,136 +43,23 @@ fn to_xml<T: serde::Serialize>(value: &T) -> String {
     .expect("Should be UTF8")
 }
 
+/// Split a comma separated list of AI object types.
+pub(crate) fn parse_ai_types(list: &str) -> Vec<String> {
+    list.split(',')
+        .map(|part| part.trim().to_string())
+        .filter(|part| !part.is_empty())
+        .collect()
+}
+
 /// Entry point for the vitals subcommand
 pub(crate) async fn main(opt: Opt, reactor: NeoReactor) -> Result<()> {
     let camera = reactor.get(&opt.camera).await?;
-    let ai_types: Vec<String> = opt
-        .ai_types
-        .split(',')
-        .map(|part| part.trim().to_string())
-        .filter(|part| !part.is_empty())
-        .collect();
+    let ai_types = parse_ai_types(&opt.ai_types);
 
     let parts = camera
         .run_task(move |cam| {
             let ai_types = ai_types.clone();
-            Box::pin(async move {
-                // Every read below is independent and answered by its own message number, so they
-                // are sent together rather than one round trip at a time. Output keeps this order.
-                let mut optional: Vec<BoxFuture<'_, Vec<String>>> = vec![
-                    // The PIR is not fatal: a camera without one still has a battery worth reporting.
-                    async {
-                        match cam.get_pirstate().await {
-                            Ok(pir) => vec![to_xml(&pir)],
-                            Err(err) => {
-                                log::info!("No PIR configuration on this camera: {:?}", err);
-                                vec![]
-                            }
-                        }
-                    }
-                    .boxed(),
-                    // FTP: the upload period and which triggers upload.
-                    async {
-                        match cam.get_ftp().await {
-                            Ok(ftp) => vec![to_xml(&ftp)],
-                            Err(err) => {
-                                log::info!("No FTP configuration on this camera: {:?}", err);
-                                vec![]
-                            }
-                        }
-                    }
-                    .boxed(),
-                    async {
-                        match cam.get_ftp_task().await {
-                            Ok(task) => vec![to_xml(&task)],
-                            Err(err) => {
-                                log::info!("No FTP trigger schedule on this camera: {:?}", err);
-                                vec![]
-                            }
-                        }
-                    }
-                    .boxed(),
-                    // Anti-flicker, out of the wider image settings.
-                    async {
-                        match cam.get_isp().await {
-                            Ok(isp) => vec![to_xml(&isp)],
-                            Err(err) => {
-                                log::info!("No image settings on this camera: {:?}", err);
-                                vec![]
-                            }
-                        }
-                    }
-                    .boxed(),
-                    // Cellular: signal on a 4G camera, and the SIM and modem identifiers. A camera
-                    // on wifi answers neither, which is not an error.
-                    async {
-                        match cam.get_cellular_status().await {
-                            Ok(info) => vec![to_xml(&info)],
-                            Err(err) => {
-                                log::info!("No cellular status on this camera: {:?}", err);
-                                vec![]
-                            }
-                        }
-                    }
-                    .boxed(),
-                    async {
-                        match cam.get_cellular_module().await {
-                            Ok(info) => vec![to_xml(&info)],
-                            Err(err) => {
-                                log::info!("No cellular module info on this camera: {:?}", err);
-                                vec![]
-                            }
-                        }
-                    }
-                    .boxed(),
-                    // The video overlay: the camera's own name and the logo watermark.
-                    async {
-                        match cam.get_osd().await {
-                            Ok(osd) => {
-                                let mut parts = vec![];
-                                if let Some(channel_name) = osd.channel_name.as_ref() {
-                                    parts.push(to_xml(channel_name));
-                                }
-                                if let Some(datetime) = osd.datetime.as_ref() {
-                                    parts.push(to_xml(datetime));
-                                }
-                                parts
-                            }
-                            Err(err) => {
-                                log::info!("No OSD configuration on this camera: {:?}", err);
-                                vec![]
-                            }
-                        }
-                    }
-                    .boxed(),
-                ];
-                for ai_type in ai_types.iter().cloned() {
-                    optional.push(
-                        async move {
-                            match cam.get_ai_detect_cfg(&ai_type).await {
-                                Ok(cfg) => vec![to_xml(&cfg)],
-                                Err(err) => {
-                                    log::info!("No AI type {} on this camera: {:?}", ai_type, err);
-                                    vec![]
-                                }
-                            }
-                        }
-                        .boxed(),
-                    );
-                }
-
-                let (battery, rest) = futures::join!(
-                    cam.battery_info(),
-                    stream::iter(optional)
-                        .buffered(MAX_IN_FLIGHT)
-                        .collect::<Vec<_>>()
-                );
-                let battery = battery.context("Unable to get camera Battery state")?;
-                let mut parts: Vec<String> = vec![to_xml(&battery)];
-                parts.extend(rest.into_iter().flatten());
-
-                Ok(parts)
-            })
+            Box::pin(async move { read_parts(cam, &ai_types).await })
         })
         .await?;
 
@@ -180,4 +68,125 @@ pub(crate) async fn main(opt: Opt, reactor: NeoReactor) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Every vitals reading as XML fragments, inside the session the caller already holds.
+///
+/// Shared with `apply --report`, so a write can be confirmed without paying for a second wake.
+pub(crate) async fn read_parts(cam: &BcCamera, ai_types: &[String]) -> Result<Vec<String>> {
+    // Every read below is independent and answered by its own message number, so they
+    // are sent together rather than one round trip at a time. Output keeps this order.
+    let mut optional: Vec<BoxFuture<'_, Vec<String>>> = vec![
+        // The PIR is not fatal: a camera without one still has a battery worth reporting.
+        async {
+            match cam.get_pirstate().await {
+                Ok(pir) => vec![to_xml(&pir)],
+                Err(err) => {
+                    log::info!("No PIR configuration on this camera: {:?}", err);
+                    vec![]
+                }
+            }
+        }
+        .boxed(),
+        // FTP: the upload period and which triggers upload.
+        async {
+            match cam.get_ftp().await {
+                Ok(ftp) => vec![to_xml(&ftp)],
+                Err(err) => {
+                    log::info!("No FTP configuration on this camera: {:?}", err);
+                    vec![]
+                }
+            }
+        }
+        .boxed(),
+        async {
+            match cam.get_ftp_task().await {
+                Ok(task) => vec![to_xml(&task)],
+                Err(err) => {
+                    log::info!("No FTP trigger schedule on this camera: {:?}", err);
+                    vec![]
+                }
+            }
+        }
+        .boxed(),
+        // Anti-flicker, out of the wider image settings.
+        async {
+            match cam.get_isp().await {
+                Ok(isp) => vec![to_xml(&isp)],
+                Err(err) => {
+                    log::info!("No image settings on this camera: {:?}", err);
+                    vec![]
+                }
+            }
+        }
+        .boxed(),
+        // Cellular: signal on a 4G camera, and the SIM and modem identifiers. A camera
+        // on wifi answers neither, which is not an error.
+        async {
+            match cam.get_cellular_status().await {
+                Ok(info) => vec![to_xml(&info)],
+                Err(err) => {
+                    log::info!("No cellular status on this camera: {:?}", err);
+                    vec![]
+                }
+            }
+        }
+        .boxed(),
+        async {
+            match cam.get_cellular_module().await {
+                Ok(info) => vec![to_xml(&info)],
+                Err(err) => {
+                    log::info!("No cellular module info on this camera: {:?}", err);
+                    vec![]
+                }
+            }
+        }
+        .boxed(),
+        // The video overlay: the camera's own name and the logo watermark.
+        async {
+            match cam.get_osd().await {
+                Ok(osd) => {
+                    let mut parts = vec![];
+                    if let Some(channel_name) = osd.channel_name.as_ref() {
+                        parts.push(to_xml(channel_name));
+                    }
+                    if let Some(datetime) = osd.datetime.as_ref() {
+                        parts.push(to_xml(datetime));
+                    }
+                    parts
+                }
+                Err(err) => {
+                    log::info!("No OSD configuration on this camera: {:?}", err);
+                    vec![]
+                }
+            }
+        }
+        .boxed(),
+    ];
+    for ai_type in ai_types {
+        optional.push(
+            async move {
+                match cam.get_ai_detect_cfg(ai_type).await {
+                    Ok(cfg) => vec![to_xml(&cfg)],
+                    Err(err) => {
+                        log::info!("No AI type {} on this camera: {:?}", ai_type, err);
+                        vec![]
+                    }
+                }
+            }
+            .boxed(),
+        );
+    }
+
+    let (battery, rest) = futures::join!(
+        cam.battery_info(),
+        stream::iter(optional)
+            .buffered(MAX_IN_FLIGHT)
+            .collect::<Vec<_>>()
+    );
+    let battery = battery.context("Unable to get camera Battery state")?;
+    let mut parts: Vec<String> = vec![to_xml(&battery)];
+    parts.extend(rest.into_iter().flatten());
+
+    Ok(parts)
 }
