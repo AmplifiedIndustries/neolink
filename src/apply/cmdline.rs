@@ -87,6 +87,15 @@ pub struct Opt {
     /// Largest detected height for one object type, as a fraction of the frame. Repeatable
     #[arg(long = "ai-max-height", value_parser = ai_value_parse)]
     pub ai_max_height: Vec<AiValue>,
+    /// Turn every cell of one object type's detection zone on, sized from the camera's own grid,
+    /// so the caller needs no prior read to know it. Repeatable
+    #[arg(long = "ai-zone-full")]
+    pub ai_zone_full: Vec<String>,
+    /// Skip an AI object type the camera refuses instead of failing the whole apply. The camera
+    /// answers an unsupported type the same way as an unknown one, so this is how a caller that
+    /// has not read the camera writes the types a model may lack
+    #[arg(long)]
+    pub ai_optional: bool,
     /// The camera name drawn on the video
     #[arg(long)]
     pub osd_name: Option<String>,
@@ -142,6 +151,9 @@ pub struct Opt {
     /// Turn one FTP trigger on or off, written `people=on`. Repeatable
     #[arg(long = "ftp-trigger", value_parser = trigger_parse)]
     pub ftp_triggers: Vec<TriggerSetting>,
+    /// Turn every FTP trigger the camera has on or off. A `--ftp-trigger` for one type still wins
+    #[arg(long, value_parser = onoff_parse)]
+    pub ftp_trigger_all: Option<bool>,
     /// Turn FTP upload as a whole on or off: the switch the Reolink app shows above the triggers.
     /// Off, the camera uploads nothing whatever its triggers and server say
     #[arg(long, value_parser = onoff_parse)]
@@ -152,6 +164,18 @@ pub struct Opt {
     /// Anti-flicker: 50hz, 60hz, outdoor, or off
     #[arg(long)]
     pub anti_flicker: Option<String>,
+    /// Once everything is written, print what the vitals command prints, from the same session
+    #[arg(long)]
+    pub report: bool,
+    /// Comma separated AI object types the report reads
+    #[arg(long, default_value = "people,vehicle,dog_cat")]
+    pub report_ai_types: String,
+    /// Change the password of `--new-password-user`, as the very last step of the session
+    #[arg(long, requires = "new_password_user")]
+    pub new_password: Option<String>,
+    /// The user whose password `--new-password` changes, normally the one logged in
+    #[arg(long, requires = "new_password")]
+    pub new_password_user: Option<String>,
 }
 
 /// One FTP trigger type and whether it should upload
