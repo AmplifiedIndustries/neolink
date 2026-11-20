@@ -1,8 +1,9 @@
 ///
 /// # Neolink Apply
 ///
-/// Writes several camera settings inside **one** session: the PIR switch, the PIR sensitivity, any
-/// number of per-object-type AI sensitivities, and the video overlay (camera name and watermark).
+/// Writes several camera settings inside **one** session: the PIR switch, the PIR sensitivity, the
+/// PIR false alarm filter, any number of per-object-type AI sensitivities and stay times, and the
+/// video overlay (camera name and watermark).
 ///
 /// The reason is the same one behind the `vitals` command. Login is what costs time and battery on
 /// a 4G camera, not the messages, so a screen that saves three settings must not pay for three
@@ -22,6 +23,7 @@
 ///
 /// ```bash
 /// neolink apply --config=config.toml CameraName --pir on --pir-sensitivity 26 --ai people=30 --ai vehicle=45
+/// neolink apply --config=config.toml CameraName --pir-reduce-false-alarm on --ai-stay-time people=0
 /// neolink apply --config=config.toml CameraName --ai people=60 --ai-zone-full people --ai-optional \
 ///     --ftp-trigger-all on --report --new-password-user admin --new-password hunter2
 /// ```
@@ -33,6 +35,7 @@ use neolink_core::bc::xml::AiDetectCfg;
 #[derive(Clone, Debug, Default)]
 struct AiChange {
     sensitivity: Option<u8>,
+    stay_time: Option<u32>,
     zone: Option<String>,
     min_width: Option<String>,
     min_height: Option<String>,
@@ -66,6 +69,9 @@ pub(crate) use cmdline::Opt;
 pub(crate) async fn main(opt: Opt, reactor: NeoReactor) -> Result<()> {
     let camera = reactor.get(&opt.camera).await?;
     let (pir, pir_sensitivity, ai) = (opt.pir, opt.pir_sensitivity, opt.ai.clone());
+    let pir_reduce_false_alarm = opt.pir_reduce_false_alarm;
+    let touches_pir =
+        pir.is_some() || pir_sensitivity.is_some() || pir_reduce_false_alarm.is_some();
     let (osd_name, osd_watermark, osd_show_name, osd_set_cmd_id) = (
         opt.osd_name.clone(),
         opt.osd_watermark,
@@ -130,6 +136,9 @@ pub(crate) async fn main(opt: Opt, reactor: NeoReactor) -> Result<()> {
     for setting in &ai {
         ai_changes.entry(setting.ai_type.clone()).or_default().sensitivity = Some(setting.sensitivity);
     }
+    for entry in &opt.ai_stay_time {
+        ai_changes.entry(entry.ai_type.clone()).or_default().stay_time = Some(entry.seconds);
+    }
     for entry in &opt.ai_zone {
         ai_changes.entry(entry.ai_type.clone()).or_default().zone = Some(entry.value.clone());
     }
@@ -149,8 +158,7 @@ pub(crate) async fn main(opt: Opt, reactor: NeoReactor) -> Result<()> {
         ai_changes.entry(ai_type.clone()).or_default().full_zone = true;
     }
 
-    if pir.is_none()
-        && pir_sensitivity.is_none()
+    if !touches_pir
         && ai_changes.is_empty()
         && !touches_osd
         && !touches_ftp
@@ -178,7 +186,7 @@ pub(crate) async fn main(opt: Opt, reactor: NeoReactor) -> Result<()> {
             let ftp_user = ftp_user.clone();
             let ftp_password = ftp_password.clone();
             Box::pin(async move {
-                if pir.is_some() || pir_sensitivity.is_some() {
+                if touches_pir {
                     let mut pir_state = cam
                         .get_pirstate()
                         .await
@@ -188,6 +196,9 @@ pub(crate) async fn main(opt: Opt, reactor: NeoReactor) -> Result<()> {
                     }
                     if let Some(sensitivity) = pir_sensitivity {
                         pir_state.sensiValue = sensitivity;
+                    }
+                    if let Some(on) = pir_reduce_false_alarm {
+                        pir_state.reduceFalseAlarm = u8::from(on);
                     }
                     cam.set_pirstate(pir_state)
                         .await
@@ -212,6 +223,9 @@ pub(crate) async fn main(opt: Opt, reactor: NeoReactor) -> Result<()> {
                     };
                     if let Some(sensitivity) = change.sensitivity {
                         cfg.sensitivity = Some(sensitivity);
+                    }
+                    if let Some(seconds) = change.stay_time {
+                        cfg.stay_time = Some(seconds);
                     }
                     if let Some(zone) = change.zone.clone() {
                         cfg.area = Some(zone);
