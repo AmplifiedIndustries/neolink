@@ -35,6 +35,26 @@ fn ai_setting_parse(src: &str) -> Result<AiSetting> {
     })
 }
 
+/// One AI object type and how long an object of it must stay in view, written `type=seconds`
+#[derive(Clone, Debug)]
+pub struct AiStayTime {
+    pub ai_type: String,
+    pub seconds: u32,
+}
+
+fn ai_stay_time_parse(src: &str) -> Result<AiStayTime> {
+    let (ai_type, value) = src
+        .split_once('=')
+        .ok_or_else(|| anyhow!("Expected <type>=<seconds>, got {}", src))?;
+    let seconds: u32 = value
+        .parse()
+        .map_err(|_| anyhow!("Stay time {} is not a whole number of seconds", value))?;
+    Ok(AiStayTime {
+        ai_type: ai_type.to_string(),
+        seconds,
+    })
+}
+
 /// One AI object type and a free-form value for it, written `type=value`
 ///
 /// Used for the settings whose value the CLI has no business interpreting: the detection zone is
@@ -67,9 +87,16 @@ pub struct Opt {
     /// PIR sensitivity, on the camera's own inverted sensiValue scale
     #[arg(long)]
     pub pir_sensitivity: Option<u8>,
+    /// Turn the PIR false alarm filter (the camera's reduceFalseAlarm) on or off
+    #[arg(long, value_parser = onoff_parse)]
+    pub pir_reduce_false_alarm: Option<bool>,
     /// AI sensitivity for one object type, written `people=30`. Repeatable
     #[arg(long = "ai", value_parser = ai_setting_parse)]
     pub ai: Vec<AiSetting>,
+    /// Seconds an object of one type must stay in view before the camera reports it (the
+    /// camera's stayTime), written `people=0`. Repeatable
+    #[arg(long = "ai-stay-time", value_parser = ai_stay_time_parse)]
+    pub ai_stay_time: Vec<AiStayTime>,
     /// Detection zone for one object type, written `people=<base64>`, exactly as the camera
     /// encodes it. Repeatable
     #[arg(long = "ai-zone", value_parser = ai_value_parse)]
